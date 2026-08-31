@@ -274,6 +274,8 @@ PubSubClient mqttClient(wifiClient);
 // - Passive discovery: a CRC-valid frame from a previously unknown device address
 //   (> 0x000000FF) schedules automatic identification at the next safe bus-idle slot.
 // - Optional experimental runtime writes for documented classic/HBW switch actors.
+// v0.9.3g3: HBW-1W-T10 invalid temperatures <= -270.00 degC publish an empty MQTT payload
+// so Home Assistant numeric temperature sensors become unknown instead of keeping a bogus value.
 // v0.9.3g2: HBW-Sen-EP (0x84) real/source-verified counter payload is
 // 69 <channel> <uint16_be>. Counter channels are exposed to HA as numeric
 // sensors with state_class=total_increasing and unit 'impulses'. Active polling
@@ -315,7 +317,7 @@ PubSubClient mqttClient(wifiClient);
 // HBW-LC-Sw8 (0x83) eight switch channels enabled for hardware verification.
 //   Disabled by default and deliberately separate from EEPROM/config support.
 //
-static constexpr const char *FW_VERSION = "0.9.3g2";
+static constexpr const char *FW_VERSION = "0.9.3g3";
 
 // ============================================================
 // Hardware / HM485
@@ -2534,7 +2536,10 @@ void mqttPublishChannel(HM485Device *device, uint8_t busChannel)
   else if (channelIsTemperatureSensor(device, busChannel))
   {
     if (channelTemperatureUnavailable(device, busChannel))
-      payload = "unknown";
+      // HA numeric sensors must not receive the non-numeric string "unknown".
+      // An empty MQTT payload makes the state unknown and, when retained,
+      // also removes the stale numeric value from the broker.
+      payload = "";
     else
       payload = String(channelTemperatureCentiDegC(device, busChannel) / 100.0f, 2);
   }
