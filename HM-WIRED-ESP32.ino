@@ -2489,7 +2489,7 @@ static bool channelTemperatureUnavailable(const HM485Device *device, uint8_t bus
 {
   // HBW-1W-T10 uses -273.15 degC as its "no sensor / invalid sensor" marker.
   return channelIsTemperatureSensor(device, busChannel) &&
-         channelTemperatureCentiDegC(device, busChannel) == -27315;
+         channelTemperatureCentiDegC(device, busChannel) <= -27000;
 }
 
 // ============================================================
