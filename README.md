@@ -73,6 +73,8 @@ Aktuell getestet mit einem SP485/SP3485-artigen 3,3-V-RS485-Transceiver.
 
 Verdrahtung am WT32:
 
+![WiFiWatch Wiring Diagram](docs/HM-Wired-ESP32-wiring.png)
+
 | Funktion | GPIO | RS485-Modul |
 |---|---:|---|
 | HM485 RX | GPIO35 | RO / RX |
