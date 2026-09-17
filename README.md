@@ -2,6 +2,10 @@
 
 Ein ESP32/WT32-ETH01 als Ethernet-/MQTT-Gateway für **Homematic Wired / HM485**.
 
+
+Mit diesem Adapter / Gateway ist es möglich Homematic Wired (HMW) Module direkt an Homeassistant anzubinden. Es wird keine CCU oder hm485d benötigt.
+
+
 Der aktuelle Entwicklungsstand ist **v0.9.3g1**. Das Gateway arbeitet produktiv mit nativer HM485-Discovery für offizielle HMW-Geräte und zusätzlicher passiver Erkennung ausgewählter HBW/Homebrew-Geräte. Zustände werden gelesen, über MQTT/Home Assistant bereitgestellt und bei ausdrücklich freigegebenen, real getesteten Aktoren auch geschrieben.
 
 Schreibzugriffe sind weiterhin **geräte- und protokollspezifisch freigegeben**. Es gibt keinen generischen Schreibmodus für unbekannte Geräte.
