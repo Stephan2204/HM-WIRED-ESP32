@@ -412,7 +412,7 @@ Development continues step by step based on real bus captures and tests on real 
 
 ## Version status
 
-This README describes development version **v0.9.3g1**.
+This README describes development version **v0.9.3g3**.
 
 For the HBW-Sen-EP, the FHEM files `hbw_sen_ep.xml` / `hbw_sen_ep.pm` as well as the available Homebrew sources were additionally evaluated. Since the source code may contain experimental local modifications, XML, source code and real bus observations are deliberately evaluated separately.
 
