@@ -1,173 +1,172 @@
-# HM485 Gateway für WT32-ETH01
+# HM485 Gateway for WT32-ETH01
 
-Ein ESP32/WT32-ETH01 als Ethernet-/MQTT-Gateway für **Homematic Wired / HM485**.
-
-
-Mit diesem Adapter / Gateway ist es möglich Homematic Wired (HMW) Module direkt an Homeassistant anzubinden. Es wird keine CCU oder hm485d benötigt.
+An ESP32/WT32-ETH01 Ethernet/MQTT gateway for **Homematic Wired / HM485**.
 
 
-Der aktuelle Entwicklungsstand ist **v0.9.3g1**. Das Gateway arbeitet produktiv mit nativer HM485-Discovery für offizielle HMW-Geräte und zusätzlicher passiver Erkennung ausgewählter HBW/Homebrew-Geräte. Zustände werden gelesen, über MQTT/Home Assistant bereitgestellt und bei ausdrücklich freigegebenen, real getesteten Aktoren auch geschrieben.
+This adapter/gateway makes it possible to connect Homematic Wired (HMW) modules directly to Home Assistant. No CCU or hm485d is required.
 
-Schreibzugriffe sind weiterhin **geräte- und protokollspezifisch freigegeben**. Es gibt keinen generischen Schreibmodus für unbekannte Geräte.
+The current development version is **v0.9.3g3**. The gateway is in productive use with native HM485 discovery for official HMW devices and additional passive detection of selected HBW/Homebrew devices. States are read and made available via MQTT/Home Assistant, and for explicitly enabled, real-world-tested actuators, commands can also be written.
 
-## Aktueller Funktionsumfang
+Write access remains **device- and protocol-specific**. There is no generic write mode for unknown devices.
 
-- native HM485-Discovery über den vollständigen 32-Bit-Prefix-Baum
-- passive Erkennung von HBW/Homebrew-Geräten über gültige Busframes und `0x41`-Identity-Broadcasts
-- keine fest im Code hinterlegten Geräteadressen
-- automatische Abfrage von Gerätetyp, Seriennummer und Firmware
-- Lesen von EEPROM-Daten und Kanalstatus für dafür freigegebene Geräte
-- passive Auswertung von HM485-Statusereignissen für schnelle Zustandsupdates
-- gezieltes Status-Polling für Geräte, deren aktiver Read-Pfad real verifiziert ist
-- persistente Gerätedatenbank im NVS; bekannte passive Geräte werden nach einem ESP-Neustart wiederhergestellt
-- gezielte Verifikation wiederhergestellter Geräte nach Native Discovery
-- explizites „Gerät vergessen“ inklusive Löschen der retained Home-Assistant-Discovery-Einträge
-- kontrollierte Schaltfunktion für real verifizierte Aktorprofile
-- Ethernet als primärer Netzwerkzugang
-- WLAN als Fallback
-- MQTT mit retained States und Availability
+## Current feature set
+
+- native HM485 discovery across the complete 32-bit prefix tree
+- passive detection of HBW/Homebrew devices via valid bus frames and `0x41` identity broadcasts
+- no hard-coded device addresses
+- automatic querying of device type, serial number and firmware
+- reading EEPROM data and channel states for explicitly supported devices
+- passive evaluation of HM485 status events for fast state updates
+- targeted status polling for devices whose active read path has been verified on real hardware
+- persistent device database in NVS; known passive devices are restored after an ESP restart
+- targeted verification of restored devices after native discovery
+- explicit “Forget device” function, including removal of retained Home Assistant discovery entries
+- controlled switching for actuator profiles verified on real hardware
+- Ethernet as the primary network connection
+- Wi-Fi as fallback
+- MQTT with retained states and availability
 - Home Assistant MQTT Discovery
-- mDNS unter `http://<hostname>.local/`
-- direkter Home-Assistant-Link zur Gateway-Weboberfläche (`configuration_url`)
-- stabile MQTT-Pfade auf Basis der Seriennummer
-- frei vergebbare Geräte- und Kanalnamen
-- semantische Kanalprofile
-- NO/NC-Invertierung pro Kanal
-- persistente Konfiguration im ESP32-NVS
-- Web-Oberfläche mit Deutsch/Englisch-Umschaltung
-- Konfigurations-/Profil-Backup und Restore
-- Web-OTA
-- RAW-RX-Only-Diagnosemodus mit harter TX-Sperre
-- passiver HM485-Adresskonfliktschutz
-- erweiterte ESP32-Systemdiagnose mit Chip-, RAM-, Flash-, Sketch- und Reset-Informationen
+- mDNS at `http://<hostname>.local/`
+- direct Home Assistant link to the gateway web interface (`configuration_url`)
+- stable MQTT paths based on the device serial number
+- freely configurable device and channel names
+- semantic channel profiles
+- NO/NC inversion per channel
+- persistent configuration in ESP32 NVS
+- web interface with German/English language switching
+- configuration/profile backup and restore
+- Web OTA
+- RAW-RX-Only diagnostic mode with hard TX lockout
+- passive HM485 address-conflict protection
+- extended ESP32 system diagnostics with chip, RAM, flash, sketch and reset information
 
-## Standard-Zugangsdaten / Erstinstallation
+## Default credentials / First installation
 
-Nach einem frischen Flash ohne vorhandene NVS-Konfiguration gelten folgende Standardwerte:
+After a fresh flash without an existing NVS configuration, the following default values apply:
 
-| Funktion | Standardwert |
+| Function | Default value |
 |---|---|
-| Web-Benutzername | `admin` |
-| Web-Passwort | `hm485setup` |
-| Setup-AP SSID | `HM485-Gateway-XXXXXX` |
-| Setup-AP Passwort | `hm485setup` |
-| MQTT-Port | `1883` |
+| Web username | `admin` |
+| Web password | `hm485setup` |
+| Setup AP SSID | `HM485-Gateway-XXXXXX` |
+| Setup AP password | `hm485setup` |
+| MQTT port | `1883` |
 | MQTT Base Topic | `hm485` |
-| Home-Assistant Discovery Prefix | `homeassistant` |
+| Home Assistant Discovery Prefix | `homeassistant` |
 | Hostname | `hm485-gateway` |
-| HM485-Zentraladresse | `00000001` |
-| Websprache | Deutsch |
+| HM485 central address | `00000001` |
+| Web language | German |
 
-`XXXXXX` wird aus der ESP32-Chip-ID gebildet und ist bei jedem Gateway unterschiedlich.
+`XXXXXX` is derived from the ESP32 chip ID and is different for every gateway.
 
-Wenn weder Ethernet noch ein konfiguriertes WLAN zur Verfügung steht, stellt das Gateway den Setup-AP bereit. Die Setup-Weboberfläche ist dann normalerweise über die AP-Adresse des ESP32 erreichbar.
+If neither Ethernet nor a configured Wi-Fi network is available, the gateway provides the setup AP. The setup web interface can then normally be reached via the ESP32 AP address.
 
-**Wichtig:** Benutzername und Passwort sollten nach der Erstinstallation geändert werden. Für einen Parallelbetrieb mit einer vorhandenen HM485-/FHEM-Zentrale sollte außerdem die eigene HM485-Adresse vor produktiven Tests von `00000001` auf z. B. `00000002` geändert werden.
+**Important:** The username and password should be changed after the initial installation. For parallel operation with an existing HM485/FHEM central unit, the gateway’s own HM485 address should also be changed from `00000001` to, for example, `00000002` before productive testing.
 
 ## Hardware
 
 ### Controller
 
 - WT32-ETH01 / ESP32
-- integriertes LAN8720 Ethernet
+- integrated LAN8720 Ethernet
 
-### RS485-Transceiver
+### RS485 transceiver
 
-Aktuell getestet mit einem SP485/SP3485-artigen 3,3-V-RS485-Transceiver.
+Currently tested with a SP485/SP3485-style 3.3 V RS485 transceiver.
 
-Verdrahtung am WT32:
+Wiring on the WT32:
 
 ![WiFiWatch Wiring Diagram](docs/HM-Wired-ESP32-wiring.png)
 
-| Funktion | GPIO | RS485-Modul |
+| Function | GPIO | RS485 module |
 |---|---:|---|
 | HM485 RX | GPIO35 | RO / RX |
 | HM485 TX | GPIO17 | DI / TX |
-| Richtung | GPIO33 | DE + /RE bzw. RTS |
+| Direction | GPIO33 | DE + /RE or RTS |
 | GND | GND | GND |
 
-GPIO35 ist ein reiner Eingang und besitzt beim ESP32 **keinen internen Pull-up**.
+GPIO35 is input-only and has **no internal pull-up** on the ESP32.
 
 ### UART
 
-HM485 wird mit folgenden Parametern betrieben:
+HM485 uses the following parameters:
 
-- 19200 Baud
-- 8 Datenbits
-- Even Parity
-- 1 Stopbit
+- 19200 baud
+- 8 data bits
+- Even parity
+- 1 stop bit
 - `SERIAL_8E1`
 
-## Wichtig: A/B-Polarität
+## Important: A/B polarity
 
-Die A/B-Bezeichnung von RS485-Modulen ist leider nicht herstellerübergreifend einheitlich.
+Unfortunately, the A/B labeling of RS485 modules is not standardized across manufacturers.
 
-Im Projekt zeigte sich, dass eine vertauschte A/B-Polarität zwar teilweise plausibel wirkende Signale erzeugen kann, aktive HM485-Kommunikation aber nicht korrekt funktioniert. Mit der richtigen Polarität funktionieren Discovery sowie TYPE-, SERIAL-, FW-, EEPROM- und STATUS-Abfragen bidirektional.
+During development it became clear that reversed A/B polarity can still produce signals that look plausible in some cases, while active HM485 communication does not work correctly. With the correct polarity, discovery as well as TYPE, SERIAL, FW, EEPROM and STATUS queries work bidirectionally.
 
-Wenn beim Aufbau nur `00`-Antworten, lange LOW-Pegel oder keine gültigen Antworten auftreten, sollte die A/B-Polarität als Erstes geprüft werden.
+If the setup only produces `00` responses, long LOW levels or no valid responses, A/B polarity should be checked first.
 
-## HM485-Adresse des Gateways
+## HM485 address of the gateway
 
-Die reguläre Zentraladresse ist:
+The regular central address is:
 
 ```text
 00000001
 ```
 
-Für Parallelbetrieb mit einer bestehenden FHEM-/HM485-Zentrale sollte eine andere Adresse verwendet werden, z. B.:
+For parallel operation with an existing FHEM/HM485 central unit, a different address should be used, for example:
 
 ```text
 00000002
 ```
 
-Die Adresse kann in der Weboberfläche geändert werden.
+The address can be changed in the web interface.
 
-### Adresskonfliktschutz
+### Address-conflict protection
 
-Nach jedem Boot lauscht das Gateway zunächst passiv auf dem Bus. Wird ein gültiges Telegramm mit der **eigenen konfigurierten Source-Adresse** erkannt, sperrt das Gateway HM485-TX.
+After every boot, the gateway first listens passively on the bus. If a valid telegram with the **gateway’s own configured source address** is detected, the gateway disables HM485 TX.
 
-Zusätzlich wird angezeigt, ob die reguläre Zentraladresse `00000001` passiv auf dem Bus gesehen wurde.
+The interface also shows whether the regular central address `00000001` has been seen passively on the bus.
 
-Wichtig: Eine Adresse, die nicht gesehen wurde, ist dadurch nicht garantiert frei. Eine vorhandene Zentrale könnte im Beobachtungszeitraum lediglich still gewesen sein.
+Important: An address that has not been seen is not necessarily free. An existing central unit may simply have remained silent during the observation period.
 
 ## Discovery
 
-Die native Discovery orientiert sich am Verhalten von `hm485d` / `HM485_Protocol.pm`.
+Native discovery is based on the behavior of `hm485d` / `HM485_Protocol.pm`.
 
-Grundprinzip:
+Basic principle:
 
-1. Start bei Adresse `00000000` mit einem gültigen Prefix-Bit.
-2. `CTRL` wird aus der Prefix-Tiefe gebildet.
-3. Ein erstes empfangenes Byte ungleich `00` bedeutet: In diesem Prefix-Zweig befindet sich mindestens ein Gerät.
-4. Ein `00` bzw. Timeout gilt als negative Antwort.
-5. Negative Prefixe werden bis zu dreimal geprüft.
-6. Der Baum wird bis zur vollständigen 32-Bit-Adresse durchlaufen.
+1. Start at address `00000000` with one valid prefix bit.
+2. `CTRL` is generated from the prefix depth.
+3. A first received byte other than `00` means: at least one device exists within this prefix branch.
+4. A `00` response or timeout is treated as a negative response.
+5. Negative prefixes are checked up to three times.
+6. The tree is traversed down to the complete 32-bit address.
 
-Für offizielle HMW-Geräte bleibt die native Discovery die primäre Quelle. HBW/Homebrew-Geräte können die native Prefix-Discovery jedoch absichtlich nicht beantworten und werden deshalb zusätzlich passiv gelernt.
+For official HMW devices, native discovery remains the primary source. HBW/Homebrew devices may intentionally not respond to native prefix discovery and are therefore additionally learned passively.
 
-Bekannte Geräte werden persistent im NVS registriert. Nach einem ESP-Neustart werden diese Einträge wieder in die Runtime-Gerätedatenbank übernommen. Das bedeutet **nicht automatisch „online“**: Geräte mit sicherem aktivem Read-Pfad werden nach Abschluss der nativen Discovery gezielt verifiziert; rein passive Geräte bleiben bekannt, bis wieder gültiger Busverkehr von ihnen gesehen wird.
+Known devices are registered persistently in NVS. After an ESP restart, these entries are restored to the runtime device database. This does **not automatically mean “online”**: devices with a safe active read path are explicitly verified after native discovery has completed; purely passive devices remain known until valid bus traffic from them is seen again.
 
-## Geräte- und Kanalprofile
+## Device and channel profiles
 
-Nach der Discovery werden bekannte HM485-Gerätetypen einem internen Geräteprofil zugeordnet.
+After discovery, known HM485 device types are assigned to an internal device profile.
 
-Aktuell enthalten sind unter anderem:
+Currently included, among others:
 
 - `HMW-Sen-SC-12-DR`
 - `HMW-IO-12-Sw14-DR`
 - `HBW-1W-T10`
 - `HBW-LC-Sw8`
-- `HBW-Sen-EP` (derzeit in realer Protokollprüfung)
+- `HBW-Sen-EP` (currently undergoing real-hardware protocol verification)
 
-### Aktuell real getestete HBW-Geräte
+### HBW devices currently tested on real hardware
 
-| Typ | Device Type | Stand |
+| Type | Device Type | Status |
 |---|---:|---|
-| HBW-1W-T10 | `0x0081` | Identity und passive Temperaturwerte real getestet |
-| HBW-LC-Sw8 | `0x0083` | Identity, 8 Kanäle, `53`-Statuspolling, `78`-Schalten und `69`-Rückmeldung real getestet |
-| HBW-Sen-EP | `0x0084` | Identity und passive `69`-Telegramme real gesehen; FHEM-XML bestätigt 8 × 16-Bit-Counter sowie `LEVEL_GET`/`INFO_LEVEL`; reale Eingangs-/Konfigurationsprüfung läuft |
+| HBW-1W-T10 | `0x0081` | Identity and passive temperature values tested on real hardware |
+| HBW-LC-Sw8 | `0x0083` | Identity, 8 channels, `53` status polling, `78` switching and `69` feedback tested on real hardware |
+| HBW-Sen-EP | `0x0084` | Identity and passive `69` telegrams observed on real hardware; FHEM XML confirms 8 × 16-bit counters as well as `LEVEL_GET`/`INFO_LEVEL`; real input/configuration verification is ongoing |
 
-Beim HBW-LC-Sw8 ist der verifizierte Laufzeitpfad:
+For the HBW-LC-Sw8, the verified runtime path is:
 
 ```text
 LEVEL_GET:  53 <channel>
@@ -175,30 +174,30 @@ LEVEL_SET:  78 <channel> <00|C8>
 INFO_LEVEL: 69 <channel> <00|C8> 00
 ```
 
-Der HBW-LC-Sw8 wird nach einem eigenen `0x41`-Identity-Broadcast gezielt neu gepollt. Dadurch werden z. B. nach einem Modulneustart die echten Ausgangszustände wieder an MQTT/Home Assistant übertragen.
+The HBW-LC-Sw8 is deliberately re-polled after one of its own `0x41` identity broadcasts. This ensures that, for example after a module restart, the actual output states are transferred to MQTT/Home Assistant again.
 
 ### HBW-Sen-EP (`0x0084`)
 
-Die FHEM-XML beschreibt das Gerät als **„Homebrew Wired S0-Interface (8-fach)“** mit acht `COUNTER_INPUT`-Kanälen. Der über `INFO_LEVEL` übertragene `STATE` ist ein **16-Bit-Wert** (`0..65535`), nicht 24 Bit.
+The FHEM XML describes the device as **“Homebrew Wired S0 Interface (8-channel)”** with eight `COUNTER_INPUT` channels. The `STATE` transmitted via `INFO_LEVEL` is a **16-bit value** (`0..65535`), not 24 bit.
 
-Der dokumentierte Laufzeitpfad ist:
+The documented runtime path is:
 
 ```text
 LEVEL_GET:  53 <bus-channel>
 INFO_LEVEL: 69 <bus-channel> <counter_hi> <counter_lo>
 ```
 
-`COUNTER` ist laut XML lesbar und als Event verfügbar. Pro Kanal sind außerdem diese EEPROM-Parameter beschrieben:
+According to the XML, `COUNTER` is readable and available as an event. The following EEPROM parameters are also defined per channel:
 
-- `SEND_DELTA_COUNT`: `1..1000`, XML-Default `1`
-- `SEND_MIN_INTERVAL`: `0..3600 s`, XML-Default `0`
-- `SEND_MAX_INTERVAL`: `5..3600 s`, XML-Default `600`
+- `SEND_DELTA_COUNT`: `1..1000`, XML default `1`
+- `SEND_MIN_INTERVAL`: `0..3600 s`, XML default `0`
+- `SEND_MAX_INTERVAL`: `5..3600 s`, XML default `600`
 
-Die aktuell vorliegenden Homebrew-Sourcen sind ausdrücklich als Entwicklungs-/Experimentierstand zu behandeln. Dort werden die acht Eingänge zyklisch alle 10 ms gelesen und der Zähler bei einer **LOW→HIGH-Flanke** erhöht. Die dortigen Defaultwerte (`SEND_MIN_INTERVAL=10 s`, `SEND_MAX_INTERVAL=150 s`) weichen von der FHEM-XML ab. Für Gateway-Unterstützung ist daher die XML die Referenz für das Geräteprofil; reale Busmitschnitte bleiben die Referenz für das tatsächlich geflashte Modul.
+The currently available Homebrew sources should explicitly be treated as development/experimental code. In that source version, the eight inputs are read cyclically every 10 ms and the counter is incremented on a **LOW→HIGH transition**. The defaults in the source (`SEND_MIN_INTERVAL=10 s`, `SEND_MAX_INTERVAL=150 s`) differ from the FHEM XML. Therefore, for gateway support, the XML is the reference for the device profile; real bus captures remain the reference for the firmware actually flashed onto the module.
 
-Pin-/Buskanal-Zuordnung des vorliegenden Source-Stands:
+Pin/bus-channel mapping in the currently available source version:
 
-| Buskanal | Eingang | Arduino-Pin |
+| Bus channel | Input | Arduino pin |
 |---:|---|---|
 | `00` | Sen1 | 14 / A0 |
 | `01` | Sen2 | 15 / A1 |
@@ -209,212 +208,212 @@ Pin-/Buskanal-Zuordnung des vorliegenden Source-Stands:
 | `06` | Sen7 | 6 |
 | `07` | Sen8 | 7 |
 
-Damit ist insbesondere wichtig: **`69 06 ...` gehört zu Sen7 / Arduino-Pin 6, nicht zu `#define Sen6 19`.**
+The important consequence is: **`69 06 ...` belongs to Sen7 / Arduino pin 6, not to `#define Sen6 19`.**
 
-Aktives Polling des HBW-Sen-EP wird erst im Gateway freigegeben, wenn `53` auf realer Hardware verifiziert wurde. Die passive Auswertung der `69`-Counter-Telegramme ist dagegen bereits protokollseitig klar.
+Active polling of the HBW-Sen-EP will only be enabled in the gateway after `53` has been verified on real hardware. Passive evaluation of the `69` counter telegrams is already clear from the protocol perspective.
 
-Die Weboberfläche zeigt nur die regulär bekannte Homematic-Kanalnummer. Die interne BUS-Kanalnummer bleibt eine Implementierungsdetails des Codes.
+The web interface shows only the regular Homematic channel number. The internal BUS channel number remains an implementation detail of the code.
 
-Pro Kanal kann gewählt werden:
+Per channel, one of the following profiles can be selected:
 
 - Auto
-- Fenster / Window
-- Tür / Door
+- Window
+- Door
 - Alarm
-- Kontakt / Contact
-- Binäreingang / Binary input
-- Analogsensor / Analog sensor
-- Frequenzsensor / Frequency sensor
-- Ausgang / Output — je nach verifiziertem Geräteprofil read-only oder schaltbar
-- Rollladen / Shutter — derzeit nur für bekannte/unterstützte Profile; generische Schreibfreigabe bleibt gesperrt
+- Contact
+- Binary input
+- Analog sensor
+- Frequency sensor
+- Output — read-only or switchable depending on the verified device profile
+- Shutter — currently only for known/supported profiles; generic write access remains disabled
 - Raw Sensor
 
-### Invertierung NO/NC
+### NO/NC inversion
 
-Pro Kanal kann die logische Auswertung invertiert werden.
+The logical evaluation can be inverted per channel.
 
-Der **HM485-Rohwert bleibt unverändert**. Nur der logische Zustand für MQTT/Home Assistant wird gedreht.
+The **raw HM485 value remains unchanged**. Only the logical state for MQTT/Home Assistant is inverted.
 
-Das ist besonders für Kontakte sinnvoll, bei denen abhängig von NO/NC beispielsweise `0` entweder „geschlossen“ oder „offen“ bedeuten kann.
+This is particularly useful for contacts where, depending on NO/NC wiring, `0` may mean either “closed” or “open”.
 
 ## MQTT
 
-Die MQTT-Pfade bleiben unabhängig von frei vergebenen Anzeigenamen stabil.
+MQTT paths remain stable regardless of freely assigned display names.
 
 Schema:
 
 ```text
-<base-topic>/<seriennummer>/channel/<kanal>/state
+<base-topic>/<serial-number>/channel/<channel>/state
 ```
 
-Beispiel:
+Example:
 
 ```text
 hm485/LEQ0251870/channel/11/state
 ```
 
-Ein späteres Umbenennen von `Kanal 11` in beispielsweise `Briefkasten` ändert den MQTT-Pfad **nicht**.
+Renaming `Channel 11`, for example to `Mailbox`, does **not** change the MQTT path.
 
-Auch die Home-Assistant-`unique_id` bleibt stabil. Der frei gewählte Name ist nur der Anzeigename.
+The Home Assistant `unique_id` also remains stable. The freely selected name is only the display name.
 
 ## Home Assistant
 
-Home Assistant Discovery wird automatisch aus Gerät, Seriennummer, Kanal und gewähltem semantischem Profil erzeugt.
+Home Assistant Discovery is generated automatically from the device, serial number, channel and selected semantic profile.
 
-Ab v0.7.51 enthält jedes per MQTT Discovery angelegte HM485-Gerät zusätzlich eine `configuration_url`. Home Assistant kann dadurch direkt auf die Weboberfläche des Gateways verlinken. Statt einer LAN- oder WLAN-IP wird der stabile mDNS-Name verwendet:
+Starting with v0.7.51, every HM485 device created via MQTT Discovery also contains a `configuration_url`. This allows Home Assistant to link directly to the gateway web interface. Instead of a LAN or Wi-Fi IP address, the stable mDNS name is used:
 
 ```text
 http://hm485-gateway.local/
 ```
 
-Bei geändertem Hostnamen entsprechend `http://<hostname>.local/`. Beim Wechsel zwischen Ethernet und WLAN bleibt die URL damit gleich. mDNS wird nach einem Wechsel des aktiven Netzwerkwegs erneut registriert. MQTT und die eigentliche Home-Assistant-Anbindung sind von einer funktionierenden `.local`-Namensauflösung unabhängig.
+If the hostname is changed, the corresponding URL is `http://<hostname>.local/`. The URL therefore remains the same when switching between Ethernet and Wi-Fi. mDNS is registered again whenever the active network path changes. MQTT and the actual Home Assistant integration do not depend on working `.local` name resolution.
 
-Beispiele für `device_class`:
+Examples for `device_class`:
 
-| Profil | Home Assistant |
+| Profile | Home Assistant |
 |---|---|
-| Fenster | `window` |
-| Tür | `door` |
+| Window | `window` |
+| Door | `door` |
 | Alarm | `problem` |
-| Kontakt | `opening` |
+| Contact | `opening` |
 
-Nach einer Änderung von Name, Profil oder Invertierung wird Discovery erneut publiziert, ohne bewusst eine neue Entity-ID/`unique_id` zu erzeugen.
+After changing a name, profile or inversion setting, Discovery is published again without intentionally creating a new entity ID/`unique_id`.
 
-## Persistenz / NVS
+## Persistence / NVS
 
-Folgende Einstellungen bzw. Metadaten überleben Neustart und OTA:
+The following settings and metadata survive restarts and OTA updates:
 
-- Netzwerk-/MQTT-Konfiguration
-- Web-Zugang
-- Gateway-HM485-Adresse
-- Websprache
-- Gerätenamen
-- Kanalnamen
-- semantische Kanalprofile
-- Invertierung pro Kanal
-- gecachte Geräte-Metadaten
-- Registry der bekannten Geräteadressen
+- network/MQTT configuration
+- web access credentials
+- gateway HM485 address
+- web language
+- device names
+- channel names
+- semantic channel profiles
+- inversion per channel
+- cached device metadata
+- registry of known device addresses
 
-Beim Boot wird die bekannte Geräteliste wiederhergestellt. Geräte mit `activeReadSafe` werden nach der nativen Discovery gezielt abgefragt. Rein passive Geräte werden nicht blind angefragt, sondern bleiben bis zum nächsten gültigen Busframe als bekannt gespeichert.
+At boot, the known device list is restored. Devices with `activeReadSafe` are queried explicitly after native discovery. Purely passive devices are not queried blindly but remain stored as known until the next valid bus frame is received.
 
-Über **Gerät vergessen** kann ein Eintrag bewusst aus Runtime-Datenbank und NVS entfernt werden. Dabei werden auch die retained Home-Assistant-Discovery-Einträge und retained State-Topics dieses Geräts bereinigt.
+Using **Forget device**, an entry can deliberately be removed from both the runtime database and NVS. The retained Home Assistant discovery entries and retained state topics for that device are also cleaned up.
 
-## Backup und Restore
+## Backup and restore
 
-Ab v0.7.51 gibt es unter **Sicherung / Backup** einen Export und Import.
+Starting with v0.7.51, **Backup** provides export and import functions.
 
-Der Export enthält:
+The export contains:
 
-- Gateway-Konfiguration
-- WLAN-Konfiguration
-- MQTT-Konfiguration
-- Web-Zugang
-- HM485-Adresse
-- Sprache
-- Namen/Profile/Invertierung der aktuell bekannten Geräte
+- gateway configuration
+- Wi-Fi configuration
+- MQTT configuration
+- web access credentials
+- HM485 address
+- language
+- names/profiles/inversion settings of currently known devices
 
-Dateiformat:
+File format:
 
 ```text
 HM485GW_BACKUP_V1
 ```
 
-### Sicherheitswarnung
+### Security warning
 
-Die Backup-Datei enthält WLAN-, MQTT- und Web-Passwörter in reversibler Form.
+The backup file contains Wi-Fi, MQTT and web passwords in reversible form.
 
-Sie sollte deshalb wie ein Passwort-Backup behandelt und nicht öffentlich abgelegt werden.
+It should therefore be treated like a password backup and must not be stored publicly.
 
-Nach einem Import startet das Gateway neu. Geräte werden anschließend weiterhin regulär per HM485-Discovery gefunden.
+After an import, the gateway restarts. Devices are then still discovered normally via HM485 discovery.
 
-## Weboberfläche
+## Web interface
 
-Ab v0.7.51 gibt es eine gemeinsame Navigation für:
+Starting with v0.7.51, the web interface uses a common navigation structure for:
 
-- Übersicht / Overview
-- Konfiguration / Configuration
-- Sicherung / Backup
-- Diagnose / Diagnostics
+- Overview
+- Configuration
+- Backup
+- Diagnostics
 - Firmware
 
-Die Sprache kann unter Konfiguration zwischen **Deutsch** und **English** gewählt werden. Die Auswahl wird im NVS gespeichert.
+The language can be changed under Configuration between **German** and **English**. The selection is stored in NVS.
 
-Die Sprachauswahl beeinflusst ausschließlich die Weboberfläche. MQTT-Topics, Seriennummern und Home-Assistant-`unique_id` bleiben unverändert.
+The language selection affects only the web interface. MQTT topics, serial numbers and Home Assistant `unique_id` values remain unchanged.
 
-Der Button **Gateway neu starten / Restart gateway** befindet sich bewusst unter **Diagnose / Diagnostics** und nicht auf der Übersichtsseite.
+The **Restart gateway** button is intentionally located under **Diagnostics**, not on the Overview page.
 
-Die Diagnoseseite zeigt zusätzlich Systeminformationen des ESP32, darunter Chipmodell und Revision, CPU-Takt/Kerne, SDK, freien und minimal freien Heap, größten freien Heap-Block, Flashgröße und -takt, Sketchgröße, freien OTA-Speicher, PSRAM (falls vorhanden), Reset-Grund und Uptime.
+The Diagnostics page also shows ESP32 system information including chip model and revision, CPU frequency/cores, SDK, free and minimum free heap, largest free heap block, flash size and clock, sketch size, free OTA space, PSRAM (if available), reset reason and uptime.
 
-Der frühere passive **Discovery Analyzer** wurde ab v0.7.51 entfernt. Nachdem die native Discovery auf realer Hardware zuverlässig funktioniert, war dieser Forschungsmodus für den regulären Betrieb nicht mehr erforderlich. Die normale Native Discovery und der permanente RAW-RX-Only-Diagnosemodus bleiben erhalten.
+The former passive **Discovery Analyzer** was removed starting with v0.7.51. Once native discovery proved reliable on real hardware, this research mode was no longer required for normal operation. Standard native discovery and the permanent RAW-RX-Only diagnostic mode remain available.
 
 ## RAW RX Only
 
-Der RAW-RX-Only-Modus ist ein permanentes Diagnose- und Sicherheitsfeature.
+RAW-RX-Only mode is a permanent diagnostic and safety feature.
 
-In diesem Modus:
+In this mode:
 
-- bleibt DIR hart auf Empfang
-- HM485-TX ist vollständig blockiert
-- Scan, Poll, ACK und Discovery sind deaktiviert
-- der normale Parser wird umgangen
-- UART-Rohdaten werden mit Timing protokolliert
+- DIR remains forced to receive
+- HM485 TX is completely blocked
+- scan, poll, ACK and discovery are disabled
+- the normal parser is bypassed
+- raw UART data is logged together with timing information
 
-Dieses Feature soll auch in zukünftigen Versionen erhalten bleiben.
+This feature is intended to remain available in future versions.
 
-## Netzwerk
+## Network
 
 ### Ethernet
 
-Ethernet ist der primäre Netzwerkpfad des WT32-ETH01.
+Ethernet is the primary network path of the WT32-ETH01.
 
-LAN8720-Belegung:
+LAN8720 pin assignment:
 
-| Funktion | GPIO |
+| Function | GPIO |
 |---|---:|
 | PHY Clock Enable | GPIO16 |
 | MDIO | GPIO18 |
 | MDC | GPIO23 |
 | REFCLK | GPIO0 |
 
-### WLAN
+### Wi-Fi
 
-Wenn Ethernet nicht verfügbar ist, kann WLAN als Fallback verwendet werden. Die Netzwerkparameter werden über die Weboberfläche gespeichert.
+If Ethernet is not available, Wi-Fi can be used as a fallback. Network parameters are stored via the web interface.
 
-## Firmware-Update
+## Firmware update
 
-Die Firmware kann über die Weboberfläche als Arduino/ESP32-`.bin` hochgeladen werden.
+The firmware can be uploaded through the web interface as an Arduino/ESP32 `.bin` file.
 
-Der Webzugang ist durch HTTP Basic Auth geschützt.
+Web access is protected by HTTP Basic Auth.
 
-Für Recovery sollte weiterhin die Möglichkeit zum seriellen Flashen erhalten bleiben.
+For recovery purposes, the option to flash the device via the serial interface should still be retained.
 
-## Sicherheitsphilosophie
+## Safety philosophy
 
-Das Gateway ist nicht mehr grundsätzlich read-only, aber Schreibzugriffe bleiben **explizit auf bekannte und verifizierte Geräte-/Kanalprofile begrenzt**.
+The gateway is no longer fundamentally read-only, but write access remains **explicitly limited to known and verified device/channel profiles**.
 
-Aktuell gilt:
+The following rules currently apply:
 
-- kein generisches Schreiben auf unbekannte HM485/HBW-Geräte
-- keine automatische Aktivierung experimenteller Aktorprotokolle
-- EEPROM-Schreiben nur für ausdrücklich unterstützte und abgesicherte Konfigurationspfade
-- RAW-RX-Only bleibt als harter Diagnosemodus mit vollständig gesperrtem HM485-TX erhalten
-- bekannte passive HBW-Geräte werden nicht automatisch aktiv gepollt, solange der Read-Pfad nicht verifiziert ist
+- no generic writes to unknown HM485/HBW devices
+- no automatic activation of experimental actuator protocols
+- EEPROM writes only for explicitly supported and safeguarded configuration paths
+- RAW-RX-Only remains a hard diagnostic mode with HM485 TX completely blocked
+- known passive HBW devices are not automatically polled actively until their read path has been verified
 
-Die Entwicklung erfolgt weiterhin schrittweise anhand realer Busmitschnitte und Tests auf realer Hardware.
+Development continues step by step based on real bus captures and tests on real hardware.
 
-## Bekannte offene Punkte
+## Known open issues
 
-- Langzeit-Test im produktiven Betrieb
-- Geräte online/offline bzw. last-seen weiter ausbauen
-- weitere HM485-/HBW-Geräteprofile real testen
-- HBW-Sen-EP (`0x0084`): `53`-Polling auf realer Hardware verifizieren, reale Eingangszählung gegen die Pin-/Buskanal-Zuordnung testen und XML-/Source-Abweichungen bei den Sendeintervallen dokumentieren
-- Backup/Restore bei zukünftigen NVS-Schemaänderungen weiter versionieren
-- weitere Aktor-/EEPROM-Schreibpfade nur nach realer Protokollverifikation freigeben
+- long-term testing in productive operation
+- further improve device online/offline and last-seen handling
+- test additional HM485/HBW device profiles on real hardware
+- HBW-Sen-EP (`0x0084`): verify `53` polling on real hardware, test actual input counting against the pin/bus-channel mapping and document XML/source discrepancies in transmission intervals
+- continue versioning Backup/Restore for future NVS schema changes
+- enable additional actuator/EEPROM write paths only after real protocol verification
 
-## Versionsstand
+## Version status
 
-Diese README beschreibt den Entwicklungsstand **v0.9.3g1**.
+This README describes development version **v0.9.3g1**.
 
-Für den HBW-Sen-EP wurden zusätzlich die FHEM-Dateien `hbw_sen_ep.xml` / `hbw_sen_ep.pm` sowie die vorliegenden Homebrew-Sourcen ausgewertet. Da die Sourcen experimentelle lokale Änderungen enthalten können, werden XML, Source und reale Busbeobachtung bewusst getrennt bewertet.
+For the HBW-Sen-EP, the FHEM files `hbw_sen_ep.xml` / `hbw_sen_ep.pm` as well as the available Homebrew sources were additionally evaluated. Since the source code may contain experimental local modifications, XML, source code and real bus observations are deliberately evaluated separately.
 
-Die Software entstand iterativ aus Busmitschnitten, dem Verhalten von `hm485d`, FHEM-/HBW-Gerätebeschreibungen und Tests mit realer Homematic-Wired- und Homebrew-Hardware. Native Discovery, passive HBW-Erkennung, persistente Gerätedatenbank und RAW-RX-Only bleiben getrennte Bausteine mit unterschiedlichen Sicherheitsaufgaben.
+The software was developed iteratively from bus captures, the behavior of `hm485d`, FHEM/HBW device descriptions and tests with real Homematic Wired and Homebrew hardware. Native discovery, passive HBW detection, the persistent device database and RAW-RX-Only remain separate components with different safety responsibilities.
