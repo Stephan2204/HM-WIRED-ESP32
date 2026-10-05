@@ -5,7 +5,7 @@ An ESP32/WT32-ETH01 Ethernet/MQTT gateway for **Homematic Wired / HM485**.
 
 This adapter/gateway makes it possible to connect Homematic Wired (HMW) modules directly to Home Assistant. No CCU or hm485d is required.
 
-The current development version is **v0.9.3g3**. The gateway is in productive use with native HM485 discovery for official HMW devices and additional passive detection of selected HBW/Homebrew devices. States are read and made available via MQTT/Home Assistant, and for explicitly enabled, real-world-tested actuators, commands can also be written.
+The current development version is **v0.9.3g5**. The gateway is in productive use with native HM485 discovery for official HMW devices and additional passive detection of selected HBW/Homebrew devices. States are read and made available via MQTT/Home Assistant, and for explicitly enabled, real-world-tested actuators, commands can also be written.
 
 Write access remains **device- and protocol-specific**. There is no generic write mode for unknown devices.
 
@@ -39,6 +39,7 @@ Write access remains **device- and protocol-specific**. There is no generic writ
 - RAW-RX-Only diagnostic mode with hard TX lockout
 - passive HM485 address-conflict protection
 - extended ESP32 system diagnostics with chip, RAM, flash, sketch and reset information
+- added NTP support for correct logging timestamps
 
 ## Default credentials / First installation
 
@@ -412,7 +413,7 @@ Development continues step by step based on real bus captures and tests on real 
 
 ## Version status
 
-This README describes development version **v0.9.3g3**.
+This README describes development version **v0.9.3g5**.
 
 For the HBW-Sen-EP, the FHEM files `hbw_sen_ep.xml` / `hbw_sen_ep.pm` as well as the available Homebrew sources were additionally evaluated. Since the source code may contain experimental local modifications, XML, source code and real bus observations are deliberately evaluated separately.
 
