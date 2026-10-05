@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ETH.h>
+#include <Network.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <Preferences.h>
@@ -8,6 +9,10 @@
 #include <Update.h>
 #include <nvs.h>
 #include <esp_system.h>
+#include <time.h>
+#include <sys/time.h>
+#include <esp_sntp.h>
+#include <lwip/ip_addr.h>
 
 HardwareSerial HM485(2);
 WebServer webServer(80);
@@ -151,6 +156,19 @@ PubSubClient mqttClient(wifiClient);
 //   retransmitting the same 0x69 frame after the missing ACK timeout.
 // - AUTO now resolves to OUTPUT_SWITCH for physically known digital outputs.
 //   Existing persisted AUTO profiles therefore become switches without NVS migration.
+
+
+// v0.9.3g5 RELIABILITY / NTP LOGGING
+// -----------------------------------
+// - Web diagnostic log now keeps monotonic uptime and, after NTP sync, also
+//   prepends real local Europe/Berlin timestamps with milliseconds.
+// - NTP server is configurable in the web UI. DHCP option 42 can be preferred;
+//   a configured manual server remains the fallback. DHCP-NTP is armed from the
+//   ETH/WiFi START event, after the TCP/IP stack exists but before the DHCP lease.
+// - IMPORTANT g5 fix: SNTP is never initialized before ETH.begin(); this avoids
+//   the LAN8720 crash/reboot loop possible in g4.
+// - Button output starts rejected by a temporary poll/pending transaction are
+//   no longer discarded. They remain queued and retry every 50 ms for up to 10 s.
 
 // GENERAL PROJECT ROADMAP (KEEP THIS SECTION IN FUTURE VERSIONS)
 // --------------------------------------------------------------
@@ -317,7 +335,7 @@ PubSubClient mqttClient(wifiClient);
 // HBW-LC-Sw8 (0x83) eight switch channels enabled for hardware verification.
 //   Disabled by default and deliberately separate from EEPROM/config support.
 //
-static constexpr const char *FW_VERSION = "0.9.3g3";
+static constexpr const char *FW_VERSION = "0.9.3g5";
 
 // ============================================================
 // Hardware / HM485
@@ -393,6 +411,11 @@ struct GatewayConfig
 
   String hostname = "hm485-gateway";
 
+  // NTP / clock. DHCP option 42 is preferred when enabled. If DHCP does not
+  // supply an NTP server, ntpServer remains the configured fallback.
+  bool ntpUseDhcp = true;
+  String ntpServer = "";
+
   // HM485 address of this gateway/central. 00000001 is the regular central
   // address. Other addresses are intended for parallel operation/tests.
   uint32_t localAddress = DEFAULT_LOCAL_ADDRESS;
@@ -419,6 +442,15 @@ uint32_t wifiConnectStartedMs = 0;
 uint32_t lastMqttReconnectMs = 0;
 uint32_t lastGatewayDiagnosticsMs = 0;
 static constexpr uint32_t GATEWAY_DIAGNOSTICS_MS = 30000;
+
+// Europe/Berlin with automatic CET/CEST changeover.
+static constexpr const char *NTP_TZ = "CET-1CEST,M3.5.0/2,M10.5.0/3";
+volatile bool ntpSyncEventPending = false;
+volatile bool ntpNetworkGotIpPending = false;
+volatile bool ntpDhcpArmed = false;
+bool ntpWasSynchronized = false;
+bool ntpClientStarted = false;
+uint32_t ntpIpReadyMs = 0;
 
 // ============================================================
 // HM485 address conflict protection (v0.7.49)
@@ -1399,6 +1431,10 @@ struct ButtonPulseState
   uint32_t dueMs = 0;
   uint32_t durationMs = 2000;
   bool returnOn = false;
+  bool startPending = false;
+  bool startOn = false;
+  uint32_t startQueuedMs = 0;
+  uint32_t nextStartRetryMs = 0;
 };
 ButtonPulseState buttonPulse;
 
@@ -1757,25 +1793,35 @@ String hexAddress(uint32_t address);
 void webLogAdd(const String &message)
 {
   uint32_t now = millis();
+  String prefix;
+  prefix.reserve(48);
 
-  char prefix[24];
-  snprintf(
-    prefix,
-    sizeof(prefix),
-    "%lu.%03lu ",
-    now / 1000UL,
-    now % 1000UL
-  );
+  // Keep uptime in every line because it is monotonic and invaluable for
+  // timing analysis. Once NTP has set a plausible wall clock, prepend local
+  // Europe/Berlin date/time including milliseconds as well.
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  if (tv.tv_sec >= 1704067200LL) // 2024-01-01: clock is plausibly synchronized
+  {
+    struct tm localTm;
+    localtime_r(&tv.tv_sec, &localTm);
+    char wall[32];
+    strftime(wall, sizeof(wall), "%Y-%m-%d %H:%M:%S", &localTm);
+    char full[56];
+    snprintf(full, sizeof(full), "%s.%03ld [%lu.%03lu] ", wall,
+             (long)(tv.tv_usec / 1000L), now / 1000UL, now % 1000UL);
+    prefix = full;
+  }
+  else
+  {
+    char up[28];
+    snprintf(up, sizeof(up), "[uptime %lu.%03lu] ", now / 1000UL, now % 1000UL);
+    prefix = up;
+  }
 
-  webLogLines[webLogHead] =
-    String(prefix) + message;
-
-  webLogHead =
-    (webLogHead + 1) %
-    WEB_LOG_LINES;
-
-  if (webLogCount < WEB_LOG_LINES)
-    webLogCount++;
+  webLogLines[webLogHead] = prefix + message;
+  webLogHead = (webLogHead + 1) % WEB_LOG_LINES;
+  if (webLogCount < WEB_LOG_LINES) webLogCount++;
 }
 
 void webLogClear()
@@ -1967,6 +2013,8 @@ void loadConfig()
   config.discoveryEnabled = preferences.getBool("ha_disc", true);
   config.experimentalWritesEnabled = preferences.getBool("exp_write", false);
   config.hostname        = preferences.getString("hostname", "hm485-gateway");
+  config.ntpUseDhcp      = preferences.getBool("ntp_dhcp", true);
+  config.ntpServer       = preferences.getString("ntp_server", "");
   config.localAddress    = preferences.getUInt("hm_addr", DEFAULT_LOCAL_ADDRESS);
   config.uiLanguage      = preferences.getString("ui_lang", "de");
 
@@ -2022,6 +2070,8 @@ void saveConfig()
   preferences.putBool("ha_disc", config.discoveryEnabled);
   preferences.putBool("exp_write", config.experimentalWritesEnabled);
   preferences.putString("hostname", config.hostname);
+  preferences.putBool("ntp_dhcp", config.ntpUseDhcp);
+  preferences.putString("ntp_server", config.ntpServer);
   preferences.putUInt("hm_addr", config.localAddress);
   preferences.putString("ui_lang", config.uiLanguage);
 
@@ -2029,6 +2079,140 @@ void saveConfig()
   preferences.putString("web_pass", config.webPassword);
 
   preferences.end();
+}
+
+// ============================================================
+// NTP / wall clock
+// ============================================================
+
+static void ntpTimeSyncCallback(struct timeval *tv)
+{
+  (void)tv;
+  // Callback may run from the TCP/IP task. Do not allocate Strings or write
+  // the web log here; defer that work to loop().
+  ntpSyncEventPending = true;
+}
+
+// Network START events happen after the interface/TCP-IP stack exists and before
+// DHCP completes. This is the safe place to enable DHCP option 42 on Ethernet.
+// Do NOT initialize SNTP here; processNtp() does that later after GOT_IP.
+void ntpNetworkEvent(arduino_event_id_t event, arduino_event_info_t info)
+{
+  (void)info;
+
+  if (event == ARDUINO_EVENT_ETH_START || event == ARDUINO_EVENT_WIFI_STA_START)
+  {
+    if (config.ntpUseDhcp)
+    {
+      esp_sntp_servermode_dhcp(true);
+      ntpDhcpArmed = true;
+    }
+    return;
+  }
+
+  if (event == ARDUINO_EVENT_ETH_GOT_IP || event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
+  {
+    ntpNetworkGotIpPending = true;
+    return;
+  }
+}
+
+void setupNtp()
+{
+  // TZ setup is purely local and is safe before any network interface exists.
+  setenv("TZ", NTP_TZ, 1);
+  tzset();
+  esp_sntp_set_time_sync_notification_cb(ntpTimeSyncCallback);
+
+  // Register before ETH.begin()/WiFi.begin() so START events can arm option 42.
+  Network.onEvent(ntpNetworkEvent);
+
+  Serial.printf("[NTP] configured fallback=%s, DHCP option 42=%s\n",
+                config.ntpServer.length() ? config.ntpServer.c_str() : "<none>",
+                config.ntpUseDhcp ? "enabled" : "disabled");
+}
+
+static bool ntpServerSlot0Usable()
+{
+  const ip_addr_t *addr = esp_sntp_getserver(0);
+  if (!addr) return false;
+  const char *txt = ipaddr_ntoa(addr);
+  if (!txt || !*txt) return false;
+  return strcmp(txt, "0.0.0.0") != 0 && strcmp(txt, "::") != 0;
+}
+
+void processNtp()
+{
+  // GOT_IP comes from the network event task; perform all potentially heavier
+  // SNTP setup here in the normal Arduino loop. Give DHCP a short moment to
+  // finish applying option 42 before deciding whether the manual fallback is needed.
+  if (ntpNetworkGotIpPending)
+  {
+    ntpNetworkGotIpPending = false;
+    ntpIpReadyMs = millis();
+    ntpClientStarted = false;
+  }
+
+  if (!ntpClientStarted && ntpIpReadyMs != 0 && millis() - ntpIpReadyMs >= 250UL)
+  {
+    if (config.ntpUseDhcp && ntpServerSlot0Usable())
+    {
+      // DHCP has already populated SNTP server slot 0. Start SNTP without
+      // calling configTime/configTzTime, because those would overwrite it.
+      esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+      esp_sntp_init();
+      ntpClientStarted = true;
+
+      const ip_addr_t *addr = esp_sntp_getserver(0);
+      String src = addr ? String(ipaddr_ntoa(addr)) : String("unknown");
+      String msg = String("[NTP] using DHCP option 42 server: ") + src;
+      Serial.println(msg);
+      webLogAdd(msg);
+    }
+    else if (config.ntpServer.length() > 0)
+    {
+      // No DHCP NTP server was received: use the configured fallback.
+      configTzTime(NTP_TZ, config.ntpServer.c_str());
+      ntpClientStarted = true;
+      String msg = String("[NTP] using configured fallback: ") + config.ntpServer;
+      Serial.println(msg);
+      webLogAdd(msg);
+    }
+    else
+    {
+      // No server available. Leave the gateway fully operational; only wall-clock
+      // timestamps remain unavailable. Do not repeatedly initialize SNTP.
+      ntpClientStarted = true;
+      Serial.println(F("[NTP] no server available; continuing with uptime-only logging"));
+      webLogAdd("[NTP] no server available; uptime-only logging");
+    }
+  }
+
+  if (!ntpSyncEventPending) return;
+  ntpSyncEventPending = false;
+
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  if (tv.tv_sec < 1704067200LL) return;
+
+  ntpWasSynchronized = true;
+  struct tm localTm;
+  localtime_r(&tv.tv_sec, &localTm);
+  char stamp[40];
+  strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S %Z", &localTm);
+
+  String source;
+  const char *name = esp_sntp_getservername(0);
+  const ip_addr_t *addr = esp_sntp_getserver(0);
+  if (name && *name) source = name;
+  else if (addr) source = String(ipaddr_ntoa(addr));
+  if (!source.length()) source = "unknown";
+
+  String msg = String("[NTP] synchronized: ") + stamp +
+               " server=" + source +
+               " dhcp42=" + (config.ntpUseDhcp ? "enabled" : "disabled");
+  Serial.println(msg);
+  webLogAdd(msg);
 }
 
 // ============================================================
@@ -3919,6 +4103,14 @@ void handleWebConfig()
 
   html += F("</div>");
 
+  html += F("<div class='card'><h2>NTP / Zeit</h2>");
+  html += F("<label><input type='checkbox' name='ntp_dhcp' value='1' ");
+  if (config.ntpUseDhcp) html += F("checked");
+  html += F("> "); html += T("NTP-Server per DHCP Option 42 bevorzugen", "Prefer NTP server from DHCP option 42"); html += F("</label>");
+  html += F("<label>"); html += T("Manueller NTP-Server / Fallback", "Manual NTP server / fallback"); html += F("</label>");
+  html += F("<input name='ntp_server' value='"); html += htmlEscape(config.ntpServer); html += F("' placeholder='z.B. 192.168.1.10 oder ntp.example.lan'>");
+  html += F("<div class='muted'>"); html += T("Ist DHCP aktiviert, wird Option 42 vor dem Bezug der DHCP-Adresse aktiviert. Ein manueller Server bleibt als Fallback bestehen, falls DHCP keinen NTP-Server liefert. Leer + DHCP aktiviert = ausschließlich DHCP-NTP. Zeitzone: Europe/Berlin (CET/CEST automatisch).", "When DHCP is enabled, option 42 is enabled before acquiring the DHCP lease. A manual server remains as fallback if DHCP supplies no NTP server. Empty + DHCP enabled = DHCP-NTP only. Time zone: Europe/Berlin (automatic CET/CEST)."); html += F("</div></div>");
+
   html += F("<div class='card'><h2>MQTT</h2>");
 
   html += F("<label>Broker / Host</label>");
@@ -4024,6 +4216,13 @@ void handleWebSave()
 
   if (webServer.hasArg("hostname"))
     config.hostname = webServer.arg("hostname");
+
+  config.ntpUseDhcp = webServer.hasArg("ntp_dhcp");
+  if (webServer.hasArg("ntp_server"))
+  {
+    config.ntpServer = webServer.arg("ntp_server");
+    config.ntpServer.trim();
+  }
 
   if (webServer.hasArg("mqtt_host"))
     config.mqttHost = webServer.arg("mqtt_host");
@@ -4199,6 +4398,7 @@ static String buildNvsBackup()
   out += "# WARNING: contains Wi-Fi/MQTT/Web passwords in reversible form.\n";
   auto add=[&](const char *k,const String &v){ out += "cfg."; out += k; out += '='; out += backupEscape(v); out += '\n'; };
   add("wifi_ssid",config.wifiSsid); add("wifi_pass",config.wifiPassword); add("hostname",config.hostname);
+  add("ntp_dhcp",config.ntpUseDhcp?"1":"0"); add("ntp_server",config.ntpServer);
   add("mqtt_host",config.mqttHost); add("mqtt_port",String(config.mqttPort)); add("mqtt_user",config.mqttUser); add("mqtt_pass",config.mqttPassword);
   add("mqtt_id",config.mqttClientId); add("mqtt_base",config.mqttBaseTopic); add("ha_prefix",config.discoveryPrefix); add("ha_disc",config.discoveryEnabled?"1":"0");
   add("hm_addr",hexAddress(config.localAddress)); add("ui_lang",config.uiLanguage); add("exp_write",config.experimentalWritesEnabled ? "1" : "0"); add("web_user",config.webUser); add("web_pass",config.webPassword);
@@ -4214,6 +4414,7 @@ static void applyImportedConfig(const String &key, const String &value)
 {
   String v=backupUnescape(value);
   if(key=="wifi_ssid") config.wifiSsid=v; else if(key=="wifi_pass") config.wifiPassword=v; else if(key=="hostname") config.hostname=v;
+  else if(key=="ntp_dhcp") config.ntpUseDhcp=(v=="1"||v=="true"||v=="on"); else if(key=="ntp_server") config.ntpServer=v;
   else if(key=="mqtt_host") config.mqttHost=v; else if(key=="mqtt_port"){ long p=v.toInt(); if(p>=1&&p<=65535) config.mqttPort=(uint16_t)p; }
   else if(key=="mqtt_user") config.mqttUser=v; else if(key=="mqtt_pass") config.mqttPassword=v; else if(key=="mqtt_id") config.mqttClientId=v;
   else if(key=="mqtt_base") config.mqttBaseTopic=normalizedTopic(v); else if(key=="ha_prefix") config.discoveryPrefix=normalizedTopic(v); else if(key=="ha_disc") config.discoveryEnabled=(v=="1"||v=="true");
@@ -7189,7 +7390,40 @@ void processOutputWrite()
 
 void processButtonPulse()
 {
-  if (!buttonPulse.active || buttonPulse.dueMs == 0 ||
+  if (!buttonPulse.active) return;
+
+  // A button press is user/automation initiated and must not be lost just
+  // because a background status poll or another short HM485 transaction is
+  // active. Keep it queued and retry until the bus core can accept it.
+  if (buttonPulse.startPending)
+  {
+    if (millis() - buttonPulse.startQueuedMs > 10000UL)
+    {
+      String msg = String("[BUTTON ERROR] queued output start timed out addr=") +
+                   hexAddress(buttonPulse.deviceAddress) + " ch=" +
+                   String(busToHmWiredChannel(buttonPulse.channel));
+      Serial.println(msg); webLogAdd(msg);
+      buttonPulse.active = false;
+      return;
+    }
+
+    if ((int32_t)(millis() - buttonPulse.nextStartRetryMs) >= 0)
+    {
+      buttonPulse.nextStartRetryMs = millis() + 50;
+      HM485Device *d = getDevice(buttonPulse.deviceAddress, false);
+      if (d && startDigitalOutputWrite(d, buttonPulse.channel, buttonPulse.startOn))
+      {
+        buttonPulse.startPending = false;
+        String msg = String("[BUTTON] queued output start accepted addr=") +
+                     hexAddress(buttonPulse.deviceAddress) + " ch=" +
+                     String(busToHmWiredChannel(buttonPulse.channel));
+        Serial.println(msg); webLogAdd(msg);
+      }
+    }
+    return;
+  }
+
+  if (buttonPulse.dueMs == 0 ||
       (int32_t)(millis() - buttonPulse.dueMs) < 0) return;
 
   if (outputWrite.active || pending.active || scanActive || statusPollActive)
@@ -7296,6 +7530,10 @@ void mqttMessageCallback(char *topicChars, byte *payloadBytes, unsigned int leng
     buttonPulse.returnOn=restOn;
     buttonPulse.durationMs=(d->buttonPulseMs[ch]?d->buttonPulseMs[ch]:2000);
     buttonPulse.dueMs=0;
+    buttonPulse.startPending=false;
+    buttonPulse.startOn=!restOn;
+    buttonPulse.startQueuedMs=millis();
+    buttonPulse.nextStartRetryMs=millis();
 
     String bmsg = String("[BUTTON] PRESS addr=") + hexAddress(d->address) +
                   " ch=" + String(busToHmWiredChannel(ch)) +
@@ -7306,10 +7544,12 @@ void mqttMessageCallback(char *topicChars, byte *payloadBytes, unsigned int leng
 
     if (!startDigitalOutputWrite(d,ch,!restOn))
     {
-      String emsg = String("[BUTTON] initial output start rejected");
+      buttonPulse.startPending = true;
+      String emsg = String("[BUTTON] initial output start busy; queued for retry") +
+                    " addr=" + hexAddress(d->address) +
+                    " ch=" + String(busToHmWiredChannel(ch));
       Serial.println(emsg);
       webLogAdd(emsg);
-      buttonPulse.active=false;
     }
   }
 }
@@ -9126,6 +9366,8 @@ void setup()
   Serial.println(F("HM485 v0.9.0: digital outputs + verified HMW-IO-12-Sw14-DR I/O EEPROM configuration."));
   Serial.println(F("EEPROM writes are allow-listed, read/modify/write and read-back verified; shutters remain write-locked."));
 
+  // Register NTP network-event handling before Ethernet starts.
+  setupNtp();
   startEthernet();
   setupWebServer();
 
@@ -9163,6 +9405,7 @@ void loop()
       rawRxOnlyFlush();
     processWifi();
     processNetwork();
+    processNtp();
     webServer.handleClient();
     digitalWrite(HM485_DIR_PIN, LOW);
     return;
@@ -9196,6 +9439,7 @@ void loop()
 
   processWifi();
   processNetwork();
+  processNtp();
   processMqtt();
 
   webServer.handleClient();
