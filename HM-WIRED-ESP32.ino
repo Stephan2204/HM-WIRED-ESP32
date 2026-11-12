@@ -335,7 +335,7 @@ PubSubClient mqttClient(wifiClient);
 // HBW-LC-Sw8 (0x83) eight switch channels enabled for hardware verification.
 //   Disabled by default and deliberately separate from EEPROM/config support.
 //
-static constexpr const char *FW_VERSION = "0.9.3g5";
+static constexpr const char *FW_VERSION = "0.9.3g7";
 
 // ============================================================
 // Hardware / HM485
@@ -818,6 +818,15 @@ static bool initialNativeDiscoveryFinished = false;
 static bool bootKnownDeviceVerifyPending = false;
 static uint8_t bootKnownDeviceVerifyIndex = 0;
 
+// v0.9.3g6: bounded, non-destructive recovery when boot discovery misses
+// devices previously registered in NVS. No NVS writes, no output commands.
+static uint8_t bootRestoredDeviceCount = 0;
+static uint8_t bootDiscoveryRetryCount = 0;
+static uint32_t bootDiscoveryRetryDueMs = 0;
+static bool bootDiscoveryRetryPending = false;
+static constexpr uint8_t BOOT_DISCOVERY_MAX_RETRIES = 2;
+static constexpr uint32_t BOOT_DISCOVERY_RETRY_DELAYS_MS[] = {15000UL, 60000UL};
+
 // v0.7.47 on-flash layout. Kept so existing friendly names/profile settings
 // survive the schema extension in v0.7.48.
 struct PersistedDeviceMetadataV1
@@ -1251,6 +1260,7 @@ static void restoreKnownDevicesFromNvs()
     restored++;
   }
 
+  bootRestoredDeviceCount = restored;
   if (restored > 0)
   {
     bootKnownDeviceVerifyPending = true;
@@ -1735,6 +1745,7 @@ void startScan();
 void activeDiscoveryStart();
 void activeDiscoveryStop();
 void processActiveDiscovery();
+void processBootDiscoveryRecovery();
 void activeDiscoveryRawByte(uint8_t rawByte);
 uint8_t activeDeviceCount();
 uint32_t activeDeviceAddress(uint8_t index);
@@ -2682,13 +2693,36 @@ static bool channelTemperatureUnavailable(const HM485Device *device, uint8_t bus
 // MQTT publishing
 // ============================================================
 
+// Report MQTT publish failures without logging payloads (which may contain
+// sensitive information). Keep diagnostics bounded when the broker is down.
+static bool mqttPublishChecked(const String &topic, const String &payload,
+                               bool retained, const char *operation)
+{
+  const bool ok = mqttClient.publish(topic.c_str(), payload.c_str(), retained);
+  if (!ok)
+  {
+    static uint32_t failureCount = 0;
+    ++failureCount;
+    if (failureCount <= 5 || (failureCount % 25) == 0)
+    {
+      webLogAdd(String("[MQTT] publish FAILED op=") + operation +
+                " topic=" + topic +
+                " bytes=" + String(payload.length()) +
+                " state=" + String(mqttClient.state()) +
+                " count=" + String(failureCount));
+    }
+  }
+  return ok;
+}
+
+
 void mqttPublishAvailability()
 {
   if (!mqttClient.connected())
     return;
 
   String topic = mqttAvailabilityTopic();
-  mqttClient.publish(topic.c_str(), "online", true);
+  mqttPublishChecked(topic, String("online"), true, "availability");
 }
 
 void mqttPublishChannel(HM485Device *device, uint8_t busChannel)
@@ -2732,11 +2766,7 @@ void mqttPublishChannel(HM485Device *device, uint8_t busChannel)
     payload = String(device->channel[busChannel].value);
   }
 
-  mqttClient.publish(
-    topic.c_str(),
-    payload.c_str(),
-    true
-  );
+  mqttPublishChecked(topic, payload, true, "state");
 }
 
 void mqttPublishAllStates()
@@ -2804,7 +2834,7 @@ void mqttPublishDiscoveryChannel(
     if (component == oldComponent) continue;
     String oldTopic = config.discoveryPrefix + "/" + String(oldComponent) + "/" +
                       uniqueId + "/config";
-    mqttClient.publish(oldTopic.c_str(), "", true);
+    mqttPublishChecked(oldTopic, String(""), true, "clear-old-discovery");
   }
 
   String deviceName = effectiveDeviceName(device);
@@ -2826,7 +2856,7 @@ void mqttPublishDiscoveryChannel(
   SemanticProfile semantic = channelSemanticProfile(device, busChannel);
   bool writableOutput = channelIsWritableOutput(device, busChannel);
   bool frequencyOutput = channelIsFrequencyOutput(device, busChannel);
-  if (semantic != SemanticProfile::OUTPUT_BUTTON)
+  if (component != "button")
   {
     payload += "\"state_topic\":\"";
     payload += jsonEscape(mqttStateTopic(device, busChannel));
@@ -2837,7 +2867,7 @@ void mqttPublishDiscoveryChannel(
     payload += "\"command_topic\":\"";
     payload += jsonEscape(mqttCommandTopic(device, busChannel));
     payload += "\",";
-    if (semantic == SemanticProfile::OUTPUT_BUTTON) payload += "\"payload_press\":\"PRESS\",";
+    if (component == "button") payload += "\"payload_press\":\"PRESS\",";
   }
   if (frequencyOutput)
   {
@@ -2867,7 +2897,7 @@ void mqttPublishDiscoveryChannel(
   payload += jsonEscape(mqttAvailabilityTopic());
   payload += "\",";
 
-  if (channelIsBinary(device, busChannel) && semantic != SemanticProfile::OUTPUT_BUTTON)
+  if (component == "binary_sensor" || component == "switch")
   {
     payload += "\"payload_on\":\"ON\",";
     payload += "\"payload_off\":\"OFF\",";
@@ -2919,11 +2949,7 @@ void mqttPublishDiscoveryChannel(
 
   payload += "}";
 
-  mqttClient.publish(
-    discoveryTopic.c_str(),
-    payload.c_str(),
-    true
-  );
+  mqttPublishChecked(discoveryTopic, payload, true, "channel-discovery");
 }
 
 
@@ -3064,7 +3090,7 @@ void mqttPublishGatewaySensorDiscovery(
 
   payload += "}";
 
-  mqttClient.publish(topic.c_str(), payload.c_str(), true);
+  mqttPublishChecked(topic, payload, true, "gateway-discovery");
 }
 
 void mqttPublishGatewayDiscovery()
@@ -5394,6 +5420,13 @@ static void processBootKnownDeviceVerification()
 
   bootKnownDeviceVerifyPending = false;
   webLogAdd("[NVS] Restored-device verification finished");
+  if (mqttClient.connected())
+  {
+    mqttPublishDiscoveryAll();
+    mqttSubscribeOutputCommands();
+    mqttPublishAllStates();
+    webLogAdd("[MQTT] Restored devices discovery/subscriptions republished");
+  }
 }
 
 void decodeEepromConfiguration(
@@ -6116,6 +6149,29 @@ void activeDiscoveryFinish()
   webLogAdd(line);
   Serial.println(line);
 
+  // A power failure can bring the gateway up before HM485 modules are ready.
+  // A zero-result scan is retried; some NVS entries may be passive HBW
+  // devices that intentionally do not answer native discovery.
+  // Only the boot/recovery path is retried; scans never erase
+  // the persisted registry. Re-check missing devices without changing outputs.
+  if (bootRestoredDeviceCount > 0 &&
+      activeDiscovery.foundCount == 0 &&
+      bootDiscoveryRetryCount < BOOT_DISCOVERY_MAX_RETRIES)
+  {
+    const uint32_t delayMs =
+      BOOT_DISCOVERY_RETRY_DELAYS_MS[bootDiscoveryRetryCount];
+    bootDiscoveryRetryDueMs = millis() + delayMs;
+    bootDiscoveryRetryPending = true;
+    webLogAdd(String("[RECOVERY] Discovery found ") +
+      String(activeDiscovery.foundCount) + "/" +
+      String(bootRestoredDeviceCount) +
+      " NVS devices; next safe retry in " + String(delayMs / 1000) + " s");
+  }
+  else if (activeDiscovery.foundCount > 0)
+  {
+    bootDiscoveryRetryPending = false;
+  }
+
   crcAbResultText += "\n# DISCOVERY FINISHED devices=";
   crcAbResultText += String(activeDiscovery.foundCount);
   crcAbResultText += " probes=";
@@ -6140,6 +6196,31 @@ void activeDiscoveryFinish()
     webLogAdd("[DISCOVERY] starting read-only scan of discovered devices");
     startScan();
   }
+}
+
+// Only take the bus for recovery when no active operations are in flight.
+// The button pulse (including its scheduled OFF edge) always has priority.
+void processBootDiscoveryRecovery()
+{
+  if (!bootDiscoveryRetryPending ||
+      (int32_t)(millis() - bootDiscoveryRetryDueMs) < 0)
+    return;
+
+  if (rawRxOnlyMode || addressGuardBootActive || addressConflictLocked ||
+      activeDiscovery.running || quietRootRequested || scanActive ||
+      statusPollActive || bootKnownDeviceVerifyPending || pending.active ||
+      outputWrite.active || ioConfig.active || buttonPulse.active ||
+      passiveCaptureActive || passiveCaptureArmRequested ||
+      !busIsIdle())
+    return;
+
+  // Advance the retry counter before starting to guarantee bounded retries.
+  bootDiscoveryRetryPending = false;
+  ++bootDiscoveryRetryCount;
+  webLogAdd(String("[RECOVERY] Safe native discovery retry ") +
+            String(bootDiscoveryRetryCount) + "/" +
+            String(BOOT_DISCOVERY_MAX_RETRIES));
+  activeDiscoveryStart();
 }
 
 static void crcAbDrainRx()
@@ -6246,7 +6327,8 @@ static void crcAbSendRawFrame(
 
 void activeDiscoveryStart()
 {
-  if (rawRxOnlyMode || ioConfig.active || outputWrite.active || quietRootRequested || activeDiscovery.running ||
+  if (rawRxOnlyMode || ioConfig.active || outputWrite.active || buttonPulse.active ||
+      quietRootRequested || activeDiscovery.running ||
       passiveCaptureActive || passiveCaptureArmRequested)
     return;
 
@@ -9436,6 +9518,7 @@ void loop()
   processScan();
   processStatusPoll();
   processBootKnownDeviceVerification();
+  processBootDiscoveryRecovery();
 
   processWifi();
   processNetwork();
