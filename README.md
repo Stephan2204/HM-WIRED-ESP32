@@ -2,10 +2,9 @@
 
 An ESP32/WT32-ETH01 Ethernet/MQTT gateway for **Homematic Wired / HM485**.
 
-
 This adapter/gateway makes it possible to connect Homematic Wired (HMW) modules directly to Home Assistant. No CCU or hm485d is required.
 
-The current development version is **v0.9.3g5**. The gateway is in productive use with native HM485 discovery for official HMW devices and additional passive detection of selected HBW/Homebrew devices. States are read and made available via MQTT/Home Assistant, and for explicitly enabled, real-world-tested actuators, commands can also be written.
+The current development version is **v0.9.3g7**. The gateway is in productive use with native HM485 discovery for official HMW devices and additional passive detection of selected HBW/Homebrew devices. States are read and made available via MQTT/Home Assistant, and for explicitly enabled, real-world-tested actuators, commands can also be written.
 
 Write access remains **device- and protocol-specific**. There is no generic write mode for unknown devices.
 
@@ -402,6 +401,16 @@ The following rules currently apply:
 
 Development continues step by step based on real bus captures and tests on real hardware.
 
+## v0.9.3g6 – Recovery after a power outage
+
+- If a native discovery run finds **zero devices** even though devices were restored from NVS, the gateway schedules at most **two safe retries**, after 15 seconds and then 60 seconds. Each delay starts when the unsuccessful scan finishes.
+- Retries are started only when the bus is idle and no scans, polls, output writes or **button pulses (including the return transition)** are in progress. Address-conflict protection and RAW-RX-Only behavior remain unchanged.
+- No devices are removed from NVS, and no outputs are activated from old commands.
+- After NVS device verification completes, the gateway republishes Home Assistant discovery configurations, output subscriptions and states if MQTT is connected. The existing republishing mechanism on MQTT reconnection remains in place.
+- A native scan finding at least one device stops the zero-result retry sequence. Purely passive HBW devices may not respond to native discovery.
+
+**Test status:** Source code change; not yet validated on real HM485 hardware. Back up the configuration before flashing to a production gateway. In particular, test recovery after a power outage and behavior during an active gate-opener pulse.
+
 ## Known open issues
 
 - long-term testing in productive operation
@@ -411,9 +420,20 @@ Development continues step by step based on real bus captures and tests on real 
 - continue versioning Backup/Restore for future NVS schema changes
 - enable additional actuator/EEPROM write paths only after real protocol verification
 
+## Changes in v0.9.3g7 (compared with g6)
+
+- **Home Assistant Discovery:** The `state_topic` requirement is now determined by the **MQTT component actually selected**. Only `button` does not require it. This restores the mandatory `state_topic` for `OUTPUT_BUTTON` profiles that fall back to `binary_sensor`.
+- `payload_press` is set only when the component is actually published as a `button`. For binary channels, `payload_on` and `payload_off` are determined by whether the published component is a `binary_sensor` or a `switch`.
+- MQTT publish failures are shown in the web log for availability, channel states, channel and gateway discovery, and removal of conflicting discovery domains. The log includes the topic, payload length, MQTT status and error count, but **never the payload contents**. To limit log volume, only the first five failures and then every 25th failure are logged.
+- The discovery retries and NVS/MQTT recovery features introduced in g6 are retained. HM485 switching and pulse logic are unchanged.
+
+**Test status:** Source changes were checked for consistency; a complete Arduino build and hardware test have not yet been performed. Before production deployment, compile the firmware, back up the configuration, perform a controlled OTA test and verify the entities in Home Assistant.
+
+**Note:** This corrects the three invalid `binary_sensor` configurations. A potentially unrelated disappearance of additional entities has not yet been fully explained.
+
 ## Version status
 
-This README describes development version **v0.9.3g5**.
+This README describes development version **v0.9.3g7**.
 
 For the HBW-Sen-EP, the FHEM files `hbw_sen_ep.xml` / `hbw_sen_ep.pm` as well as the available Homebrew sources were additionally evaluated. Since the source code may contain experimental local modifications, XML, source code and real bus observations are deliberately evaluated separately.
 
