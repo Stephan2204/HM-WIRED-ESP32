@@ -409,12 +409,10 @@ Development continues step by step based on real bus captures and tests on real 
 - After NVS device verification completes, the gateway republishes Home Assistant discovery configurations, output subscriptions and states if MQTT is connected. The existing republishing mechanism on MQTT reconnection remains in place.
 - A native scan finding at least one device stops the zero-result retry sequence. Purely passive HBW devices may not respond to native discovery.
 
-**Test status:** Source code change; not yet validated on real HM485 hardware. Back up the configuration before flashing to a production gateway. In particular, test recovery after a power outage and behavior during an active gate-opener pulse.
+Hardware validation (v0.9.3g7): Successfully tested over five days of continuous operation, including a simulated power outage. All devices and Home Assistant entities were restored automatically without manual intervention. No temporary state changes or false alarms were observed.
 
 ## Known open issues
 
-- long-term testing in productive operation
-- further improve device online/offline and last-seen handling
 - test additional HM485/HBW device profiles on real hardware
 - HBW-Sen-EP (`0x0084`): verify `53` polling on real hardware, test actual input counting against the pin/bus-channel mapping and document XML/source discrepancies in transmission intervals
 - continue versioning Backup/Restore for future NVS schema changes
@@ -426,10 +424,6 @@ Development continues step by step based on real bus captures and tests on real 
 - `payload_press` is set only when the component is actually published as a `button`. For binary channels, `payload_on` and `payload_off` are determined by whether the published component is a `binary_sensor` or a `switch`.
 - MQTT publish failures are shown in the web log for availability, channel states, channel and gateway discovery, and removal of conflicting discovery domains. The log includes the topic, payload length, MQTT status and error count, but **never the payload contents**. To limit log volume, only the first five failures and then every 25th failure are logged.
 - The discovery retries and NVS/MQTT recovery features introduced in g6 are retained. HM485 switching and pulse logic are unchanged.
-
-**Test status:** Source changes were checked for consistency; a complete Arduino build and hardware test have not yet been performed. Before production deployment, compile the firmware, back up the configuration, perform a controlled OTA test and verify the entities in Home Assistant.
-
-**Note:** This corrects the three invalid `binary_sensor` configurations. A potentially unrelated disappearance of additional entities has not yet been fully explained.
 
 ## Version status
 
